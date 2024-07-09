@@ -175,7 +175,7 @@ public class Sprite2d {
         // Compute model/view/projection matrix.
         Matrix.multiplyMM(mScratchMatrix, 0, projectionMatrix, 0, getModelViewMatrix(), 0);
 
-        program.draw(mScratchMatrix, mColor, mDrawable.getVertexArray(), 0,
+        program.drawRectangle(mScratchMatrix, mColor, mDrawable.getVertexArray(), 0,
                 mDrawable.getVertexCount(), mDrawable.getCoordsPerVertex(),
                 mDrawable.getVertexStride());
     }

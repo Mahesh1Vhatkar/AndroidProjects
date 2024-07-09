@@ -16,9 +16,15 @@
 
 package com.android.grafika;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.opengl.GLES20;
+import android.opengl.GLUtils;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -39,10 +45,14 @@ import com.android.grafika.gles.EglCore;
 import com.android.grafika.gles.FullFrameRect;
 import com.android.grafika.gles.Texture2dProgram;
 import com.android.grafika.gles.WindowSurface;
+import com.android.grafika.utils.Utils;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 
 /**
  * Demonstrates capturing video into a ring buffer.  When the "capture" button is clicked,
@@ -60,16 +70,20 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
         SurfaceTexture.OnFrameAvailableListener {
     private static final String TAG = MainActivity.TAG;
 
-    private static final int VIDEO_WIDTH = 1280;  // dimensions for 720p video
-    private static final int VIDEO_HEIGHT = 720;
+    private static final int VIDEO_WIDTH = 720;  // dimensions for 720p video
+    private static final int VIDEO_HEIGHT = 1280;
     private static final int DESIRED_PREVIEW_FPS = 15;
 
     private EglCore mEglCore;
     private WindowSurface mDisplaySurface;
     private SurfaceTexture mCameraTexture;  // receives the output from the camera preview
     private FullFrameRect mFullFrameBlit;
+    private FullFrameRect mImageFrameBlit;
+
+    private FloatBuffer imageVertexBuff;
+    private FloatBuffer imageTexBuff;
     private final float[] mTmpMatrix = new float[16];
-    private int mTextureId;
+    private int mTextureId, mImageTexId;
     private int mFrameNum;
 
     private Camera mCamera;
@@ -388,7 +402,16 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
 
         mFullFrameBlit = new FullFrameRect(
                 new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_EXT));
+
+        mImageFrameBlit = new FullFrameRect(
+                new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_2D));
+
         mTextureId = mFullFrameBlit.createTextureObject();
+        //mImageTexId = mImageFrameBlit.createTextureObject();
+        //imageVertexBuff = createImageVertexBuffer();
+        //imageTexBuff = createImageTexBuffer();
+
+        //mImageTexId = loadImageIntoTexture();
         mCameraTexture = new SurfaceTexture(mTextureId);
         mCameraTexture.setOnFrameAvailableListener(this);
 
@@ -478,16 +501,17 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
         int viewWidth = sv.getWidth();
         int viewHeight = sv.getHeight();
         GLES20.glViewport(0, 0, viewWidth, viewHeight);
-        mFullFrameBlit.drawFrame(mTextureId, mTmpMatrix);
-        drawExtra(mFrameNum, viewWidth, viewHeight);
+        mImageTexId = loadImageIntoTexture(viewWidth, viewHeight);
+        mFullFrameBlit.drawFrame(mTextureId, mTmpMatrix, mImageTexId);
+        //drawExtra(mFrameNum, viewWidth, viewHeight);
         mDisplaySurface.swapBuffers();
 
         // Send it to the video encoder.
         if (!mFileSaveInProgress) {
             mEncoderSurface.makeCurrent();
             GLES20.glViewport(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-            mFullFrameBlit.drawFrame(mTextureId, mTmpMatrix);
-            drawExtra(mFrameNum, VIDEO_WIDTH, VIDEO_HEIGHT);
+            mFullFrameBlit.drawFrame(mTextureId, mTmpMatrix, mImageTexId);
+            //drawExtra(mFrameNum, VIDEO_WIDTH, VIDEO_HEIGHT);
             mCircEncoder.frameAvailableSoon();
             mEncoderSurface.setPresentationTime(mCameraTexture.getTimestamp());
             mEncoderSurface.swapBuffers();
@@ -495,6 +519,132 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
 
         mFrameNum++;
     }
+
+    private int loadImageIntoTexture(int viewWidth, int viewHeight) {
+        // Generate texture ID
+        int[] imageTextureId = new int[1];
+
+        GLES20.glGenTextures(1, imageTextureId, 0);
+        // Bind texture
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, imageTextureId[0]);
+        int imageTexId = imageTextureId[0];
+        // Set texture parameters
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+
+        // Load image into texture
+        //Bitmap bitmap = createBitmapWithImageInTopLeft(R.drawable.bmw, VIDEO_WIDTH,VIDEO_HEIGHT);
+        String timestamp = Utils.getCurrentDateTime();
+        Bitmap bitmap = createBitmapWithTextInTopLeft(timestamp, viewWidth, viewHeight);
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0);
+        bitmap.recycle(); // Recycle the bitmap since its data is now in OpenGL
+
+        return imageTexId;
+    }
+
+    private Bitmap createBitmapWithImageInTopLeft(int imageResId, int previewWidth, int previewHeight) {
+        // Calculate the watermark size
+        int watermarkWidth = previewWidth / 6;
+        int watermarkHeight = previewHeight / 6;
+
+        // Create a bitmap with the same resolution as the camera preview
+        Bitmap bitmap = Bitmap.createBitmap(previewWidth, previewHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        // Draw a transparent background
+        canvas.drawColor(Color.TRANSPARENT);
+
+        // Load the image
+        Bitmap image = BitmapFactory.decodeResource(getResources(), imageResId);
+
+        // Create a scaled bitmap if the desired image size is different from the original
+        Bitmap scaledImage = Bitmap.createScaledBitmap(image, watermarkWidth, watermarkHeight, true);
+
+        // Draw the image on the canvas at the top-left corner
+        canvas.drawBitmap(scaledImage, 0, 0, null);
+
+        // Recycle the original bitmap if it was scaled
+        if (scaledImage != image) {
+            image.recycle();
+        }
+
+        return bitmap;
+    }
+    private Bitmap createBitmapWithTextInTopLeft(String text, int previewWidth, int previewHeight) {
+        // Calculate the text size
+        int textSize = previewHeight / 20;
+
+        // Create a bitmap with the same resolution as the camera preview
+        Bitmap bitmap = Bitmap.createBitmap(previewWidth, previewHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        // Draw a transparent background
+        canvas.drawColor(Color.TRANSPARENT);
+
+        // Set up the paint for drawing the text
+        Paint paint = new Paint();
+        paint.setColor(Color.RED);
+        paint.setTextSize(textSize);
+        paint.setAntiAlias(true);
+
+        // Apply any necessary transformations
+        canvas.save();
+        // If needed, flip the canvas horizontally
+         canvas.scale(-1, 1, previewWidth / 2f, previewHeight / 2f); // Uncomment if needed
+        // If needed, rotate the canvas to counteract any rotation
+         //canvas.rotate(-180, previewWidth / 2f, previewHeight / 2f); // Uncomment if needed
+
+        // Calculate the position to draw the text
+        float x = 10;  // Small margin from the left edge
+        float y = paint.getTextSize();  // From the top edge
+
+        // Draw the text on the canvas
+        canvas.drawText(text, x, y, paint);
+
+        // Restore the canvas to its previous state
+        canvas.restore();
+
+        return bitmap;
+    }
+
+
+
+    private FloatBuffer createImageVertexBuffer() {
+        // Define vertices for a quad in the upper left corner
+        float[] imageVertices = {
+                -1.0f,  1.0f, 0.0f,   // Top-left
+                -0.5f,  1.0f, 0.0f,   // Top-right
+                -1.0f,  0.5f, 0.0f,   // Bottom-left
+                -0.5f,  0.5f, 0.0f    // Bottom-right
+        };
+
+        FloatBuffer vertexBuffer = ByteBuffer.allocateDirect(imageVertices.length * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer();
+        vertexBuffer.put(imageVertices).position(0);
+
+        return vertexBuffer;
+    }
+
+    private FloatBuffer createImageTexBuffer() {
+        float[] texCoords = {
+                0.0f, 0.0f,  // Top-left
+                1.0f, 0.0f,  // Top-right
+                0.0f, 1.0f,  // Bottom-left
+                1.0f, 1.0f   // Bottom-right
+        };
+
+        FloatBuffer texBuffer = ByteBuffer.allocateDirect(texCoords.length * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer();
+        texBuffer.put(texCoords).position(0);
+
+        return texBuffer;
+    }
+
+
 
     /**
      * Adds a bit of extra stuff to the display just to give it flavor.
@@ -514,4 +664,6 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
         GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
     }
+
+
 }

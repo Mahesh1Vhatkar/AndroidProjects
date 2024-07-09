@@ -18,8 +18,11 @@ package com.android.grafika.gles;
 
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.opengl.GLUtils;
 import android.util.Log;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
 /**
@@ -43,6 +46,30 @@ public class Texture2dProgram {
             "    gl_Position = uMVPMatrix * aPosition;\n" +
             "    vTextureCoord = (uTexMatrix * aTextureCoord).xy;\n" +
             "}\n";
+
+    private static final String MOD_VERTEX_SHADER =
+            "uniform mat4 uMVPMatrix;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "attribute vec4 aPosition;\n" +
+                    "attribute vec4 aTextureCoord;\n" +
+                    "varying vec2 vTextureCoord;\n" +
+                    "void main() {\n" +
+                    "    gl_Position = uMVPMatrix * aPosition;\n" +
+                    "    vTextureCoord = (uTexMatrix * aTextureCoord).xy;\n" +
+                    "}\n";
+
+    private static final String MOD_FRAGMENT_SHADER_EXT =
+            "#extension GL_OES_EGL_image_external : require\n" +
+                    "precision mediump float;\n" +
+                    "varying vec2 vTextureCoord;\n" +
+                    "uniform samplerExternalOES sTexture;\n" +
+                    "uniform sampler2D sImageTexture;\n" +
+                    "void main() {\n" +
+                    "    vec4 cameraColor = texture2D(sTexture, vTextureCoord);\n" +
+                    "    vec4 imageColor = texture2D(sImageTexture, vTextureCoord);\n" +
+                    "    gl_FragColor = mix(cameraColor, imageColor, imageColor.a);\n" +
+                    "}\n";
+
 
     // Simple fragment shader for use with "normal" 2D textures.
     private static final String FRAGMENT_SHADER_2D =
@@ -145,7 +172,7 @@ public class Texture2dProgram {
                 break;
             case TEXTURE_EXT:
                 mTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
-                mProgramHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT);
+                mProgramHandle = GlUtil.createProgram(MOD_VERTEX_SHADER, MOD_FRAGMENT_SHADER_EXT);
                 break;
             case TEXTURE_EXT_BW:
                 mTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
@@ -269,6 +296,40 @@ public class Texture2dProgram {
         //Log.d(TAG, "filt size: " + width + "x" + height + ": " + Arrays.toString(mTexOffset));
     }
 
+    private FloatBuffer createImageVertexBuffer() {
+        // Define vertices for a quad in the upper left corner
+        float[] imageVertices = {
+                -1.0f,  1.0f, 0.0f,   // Top-left
+                -0.5f,  1.0f, 0.0f,   // Top-right
+                -1.0f,  0.5f, 0.0f,   // Bottom-left
+                -0.5f,  0.5f, 0.0f    // Bottom-right
+        };
+
+        FloatBuffer vertexBuffer = ByteBuffer.allocateDirect(imageVertices.length * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer();
+        vertexBuffer.put(imageVertices).position(0);
+
+        return vertexBuffer;
+    }
+
+    private FloatBuffer createImageTexBuffer() {
+        float[] texCoords = {
+                0.0f, 0.0f,  // Top-left
+                1.0f, 0.0f,  // Top-right
+                0.0f, 1.0f,  // Bottom-left
+                1.0f, 1.0f   // Bottom-right
+        };
+
+        FloatBuffer texBuffer = ByteBuffer.allocateDirect(texCoords.length * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer();
+        texBuffer.put(texCoords).position(0);
+
+        return texBuffer;
+    }
+
+
     /**
      * Issues the draw call.  Does the full setup on every call.
      *
@@ -340,4 +401,65 @@ public class Texture2dProgram {
         GLES20.glBindTexture(mTextureTarget, 0);
         GLES20.glUseProgram(0);
     }
+
+    public void draw(float[] mvpMatrix, FloatBuffer vertexBuffer, int firstVertex,
+                     int vertexCount, int coordsPerVertex, int vertexStride,
+                     float[] texMatrix, FloatBuffer texBuffer, int cameraTextureId, int texStride, int imageTextureId
+                     ) {
+        GlUtil.checkGlError("draw start");
+
+        // Select the program.
+        GLES20.glUseProgram(mProgramHandle);
+        GlUtil.checkGlError("glUseProgram");
+
+        // Set the camera texture.
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(mProgramHandle, "sTexture"), 0);
+
+        // Set the image texture.
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, imageTextureId);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(mProgramHandle, "sImageTexture"), 1);
+
+        // Copy the model / view / projection matrix over.
+        GLES20.glUniformMatrix4fv(muMVPMatrixLoc, 1, false, mvpMatrix, 0);
+        GlUtil.checkGlError("glUniformMatrix4fv");
+
+        // Copy the texture transformation matrix over.
+        GLES20.glUniformMatrix4fv(muTexMatrixLoc, 1, false, texMatrix, 0);
+        GlUtil.checkGlError("glUniformMatrix4fv");
+
+        // Enable the "aPosition" vertex attribute.
+        GLES20.glEnableVertexAttribArray(maPositionLoc);
+        GlUtil.checkGlError("glEnableVertexAttribArray");
+
+        // Connect vertexBuffer to "aPosition".
+        GLES20.glVertexAttribPointer(maPositionLoc, coordsPerVertex,
+                GLES20.GL_FLOAT, false, vertexStride, vertexBuffer);
+        GlUtil.checkGlError("glVertexAttribPointer");
+
+        // Enable the "aTextureCoord" vertex attribute.
+        GLES20.glEnableVertexAttribArray(maTextureCoordLoc);
+        GlUtil.checkGlError("glEnableVertexAttribArray");
+
+        // Connect texBuffer to "aTextureCoord".
+        GLES20.glVertexAttribPointer(maTextureCoordLoc, 2,
+                GLES20.GL_FLOAT, false, texStride, texBuffer);
+        GlUtil.checkGlError("glVertexAttribPointer");
+
+        // Draw the main texture (camera preview).
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, firstVertex, vertexCount);
+        GlUtil.checkGlError("glDrawArrays");
+
+        // Done -- disable vertex array, texture, and program.
+        GLES20.glDisableVertexAttribArray(maPositionLoc);
+        GLES20.glDisableVertexAttribArray(maTextureCoordLoc);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);  // Unbind the image texture
+        GLES20.glUseProgram(0);
+    }
+
+
+
 }
