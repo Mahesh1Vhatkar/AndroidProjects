@@ -26,6 +26,7 @@ import android.hardware.Camera;
 import android.opengl.GLES20;
 import android.opengl.GLUtils;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
 import android.support.annotation.NonNull;
@@ -188,6 +189,8 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
         mHandler.sendEmptyMessageDelayed(MainHandler.MSG_BLINK_TEXT, 1500);
 
         mOutputFile = new File(getFilesDir(), "continuous-capture.mp4");
+        mOutputFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getPath() + File.separator,
+        "continuous-capture.mp4");
         mSecondsOfVideo = 0.0f;
         updateControls();
     }
@@ -608,43 +611,6 @@ public class ContinuousCaptureActivity extends Activity implements SurfaceHolder
 
         return bitmap;
     }
-
-
-
-    private FloatBuffer createImageVertexBuffer() {
-        // Define vertices for a quad in the upper left corner
-        float[] imageVertices = {
-                -1.0f,  1.0f, 0.0f,   // Top-left
-                -0.5f,  1.0f, 0.0f,   // Top-right
-                -1.0f,  0.5f, 0.0f,   // Bottom-left
-                -0.5f,  0.5f, 0.0f    // Bottom-right
-        };
-
-        FloatBuffer vertexBuffer = ByteBuffer.allocateDirect(imageVertices.length * 4)
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer();
-        vertexBuffer.put(imageVertices).position(0);
-
-        return vertexBuffer;
-    }
-
-    private FloatBuffer createImageTexBuffer() {
-        float[] texCoords = {
-                0.0f, 0.0f,  // Top-left
-                1.0f, 0.0f,  // Top-right
-                0.0f, 1.0f,  // Bottom-left
-                1.0f, 1.0f   // Bottom-right
-        };
-
-        FloatBuffer texBuffer = ByteBuffer.allocateDirect(texCoords.length * 4)
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer();
-        texBuffer.put(texCoords).position(0);
-
-        return texBuffer;
-    }
-
-
 
     /**
      * Adds a bit of extra stuff to the display just to give it flavor.
